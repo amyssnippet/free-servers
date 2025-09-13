@@ -14,7 +14,7 @@ jobs:
           PASSWORD=$(openssl rand -base64 12)
           echo "VNC_PASSWORD=$PASSWORD" >> $GITHUB_ENV
 
-          # Create user
+          # Create a new user
           sudo sysadminctl -addUser vncuser -password "$PASSWORD"
           sudo dseditgroup -o edit -a vncuser -t user admin
 
@@ -22,25 +22,28 @@ jobs:
 
       - name: Enable VNC (Screen Sharing)
         run: |
-          # Enable Remote Management and VNC
+          # Enable Remote Management and allow VNC
           sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
             -activate -configure -access -on \
             -users vncuser -privs -all \
             -restart -agent -menu
 
-          # Set VNC password
-          echo -n "$VNC_PASSWORD" | perl -we 'print pack("H*", "01000000000000000000000000000000"); while (read(STDIN,$c,1)) { print $c }' \
+          # Set VNC password (macOS expects 8 character max)
+          VNC_PASS_SHORT=$(echo $VNC_PASSWORD | cut -c1-8)
+          echo "$VNC_PASS_SHORT" | perl -we 'print pack("H*", "01000000000000000000000000000000"); while(read(STDIN,$c,1)) { print $c }' \
             | sudo tee /Library/Preferences/com.apple.VNCSettings.txt >/dev/null
 
-            - name: Install Tailscale (Homebrew)
-              run: |
-                brew install --cask tailscale
-                sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale set --accept-dns=false
-                sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-vnc-${GITHUB_RUN_ID} --ssh
+      - name: Install Tailscale (macOS)
+        run: |
+          brew install --cask tailscale
+          sudo /Applications/Tailscale.app/Contents/MacOS/Tailscale up \
+            --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} \
+            --hostname=gh-vnc-${GITHUB_RUN_ID} \
+            --ssh
 
-                TS_IP=$(ifconfig utun100 inet | grep inet | awk '{print $2}' | head -n1)
-                echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
-
+          # Get the Tailscale IP
+          TS_IP=$(ifconfig | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}' | head -n1)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
       - name: Verify VNC Port
         run: |
