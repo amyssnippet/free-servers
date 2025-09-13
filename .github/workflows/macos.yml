@@ -1,58 +1,60 @@
-name: RDP-macOS
+name: VNC-macOS
 
 on:
   workflow_dispatch:
 
 jobs:
-  rdp-macos:
+  vnc-macos:
     runs-on: macos-latest
     timeout-minutes: 360
 
     steps:
-      - name: Set up RDP user
+      - name: Set up VNC user
         run: |
           PASSWORD=$(openssl rand -base64 12)
-          echo "RDP_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+          echo "VNC_PASSWORD=$PASSWORD" >> $GITHUB_ENV
 
-          # Create a user
-          sudo sysadminctl -addUser rdpuser -password "$PASSWORD"
-          sudo dseditgroup -o edit -a rdpuser -t user admin
+          # Create user
+          sudo sysadminctl -addUser vncuser -password "$PASSWORD"
+          sudo dseditgroup -o edit -a vncuser -t user admin
 
-          echo "RDP_CREDS=User: rdpuser | Password: $PASSWORD" >> $GITHUB_ENV
+          echo "VNC_CREDS=User: vncuser | Password: $PASSWORD" >> $GITHUB_ENV
 
-      - name: Install Homebrew dependencies
+      - name: Enable VNC (Screen Sharing)
         run: |
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          brew install xrdp
+          # Enable Remote Management and VNC
+          sudo /System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart \
+            -activate -configure -access -on \
+            -users vncuser -privs -all \
+            -restart -agent -menu
 
-      - name: Start RDP server
-        run: |
-          sudo brew services start xrdp || true
-          sudo launchctl load /usr/local/opt/xrdp/*.plist || true
+          # Set VNC password
+          echo -n "$VNC_PASSWORD" | perl -we 'print pack("H*", "01000000000000000000000000000000"); while (read(STDIN,$c,1)) { print $c }' \
+            | sudo tee /Library/Preferences/com.apple.VNCSettings.txt >/dev/null
 
       - name: Install Tailscale
         run: |
           curl -fsSL https://tailscale.com/install.sh | sh
-          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-rdp-${GITHUB_RUN_ID} --ssh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-vnc-${GITHUB_RUN_ID} --ssh
 
           TS_IP=$(tailscale ip -4 | head -n1)
           echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
 
-      - name: Verify RDP Port
+      - name: Verify VNC Port
         run: |
           echo "Tailscale IP: $TAILSCALE_IP"
-          nc -zv $TAILSCALE_IP 3389 || (echo "RDP port not reachable" && exit 1)
-          echo "RDP is accessible!"
+          nc -zv $TAILSCALE_IP 5900 || (echo "VNC port not reachable" && exit 1)
+          echo "VNC is accessible!"
 
-      - name: Maintain RDP Session
+      - name: Maintain VNC Session
         run: |
-          echo -e "\n=== RDP ACCESS ==="
-          echo "Address: $TAILSCALE_IP"
-          echo "Username: rdpuser"
-          echo "Password: $RDP_PASSWORD"
+          echo -e "\n=== VNC ACCESS ==="
+          echo "Address: $TAILSCALE_IP:5900"
+          echo "Username: vncuser"
+          echo "Password: $VNC_PASSWORD"
           echo "==================\n"
 
           while true; do
-            echo "[$(date)] RDP Active - cancel workflow to terminate"
+            echo "[$(date)] VNC Active - cancel workflow to terminate"
             sleep 300
           done
