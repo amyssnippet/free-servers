@@ -1,0 +1,58 @@
+name: RDP-macOS
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rdp-macos:
+    runs-on: macos-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Set up RDP user
+        run: |
+          PASSWORD=$(openssl rand -base64 12)
+          echo "RDP_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+
+          # Create a user
+          sudo sysadminctl -addUser rdpuser -password "$PASSWORD"
+          sudo dseditgroup -o edit -a rdpuser -t user admin
+
+          echo "RDP_CREDS=User: rdpuser | Password: $PASSWORD" >> $GITHUB_ENV
+
+      - name: Install Homebrew dependencies
+        run: |
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          brew install xrdp
+
+      - name: Start RDP server
+        run: |
+          sudo brew services start xrdp || true
+          sudo launchctl load /usr/local/opt/xrdp/*.plist || true
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-rdp-${GITHUB_RUN_ID} --ssh
+
+          TS_IP=$(tailscale ip -4 | head -n1)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Verify RDP Port
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          nc -zv $TAILSCALE_IP 3389 || (echo "RDP port not reachable" && exit 1)
+          echo "RDP is accessible!"
+
+      - name: Maintain RDP Session
+        run: |
+          echo -e "\n=== RDP ACCESS ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: rdpuser"
+          echo "Password: $RDP_PASSWORD"
+          echo "==================\n"
+
+          while true; do
+            echo "[$(date)] RDP Active - cancel workflow to terminate"
+            sleep 300
+          done
