@@ -1,0 +1,58 @@
+name: SSH-Linux
+
+on:
+  workflow_dispatch:
+
+jobs:
+  ssh-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3600
+
+    steps:
+      - name: Create SSH User
+        run: |
+          # Generate secure password
+          PASSWORD=$(openssl rand -base64 12)
+          echo "SSH_PASSWORD=$PASSWORD" >> $GITHUB_ENV
+
+          # Create user
+          sudo useradd -m -s /bin/bash sshuser
+          echo "sshuser:$PASSWORD" | sudo chpasswd
+          sudo usermod -aG sudo sshuser
+
+          echo "SSH_CREDS=User: sshuser | Password: $PASSWORD" >> $GITHUB_ENV
+
+      - name: Ensure SSH Server is Running
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          sudo systemctl enable ssh
+          sudo systemctl restart ssh
+
+      - name: Install Tailscale
+        run: |
+          curl -fsSL https://tailscale.com/install.sh | sh
+          sudo tailscale up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-ssh-${GITHUB_RUN_ID} --ssh
+
+          # Save Tailscale IP
+          TS_IP=$(tailscale ip -4 | head -n1)
+          echo "TAILSCALE_IP=$TS_IP" >> $GITHUB_ENV
+
+      - name: Verify SSH Accessibility
+        run: |
+          echo "Tailscale IP: $TAILSCALE_IP"
+          nc -zv $TAILSCALE_IP 22 || (echo "SSH port not reachable" && exit 1)
+          echo "SSH is accessible!"
+
+      - name: Maintain Connection
+        run: |
+          echo -e "\n=== SSH ACCESS ==="
+          echo "Address: $TAILSCALE_IP"
+          echo "Username: sshuser"
+          echo "Password: $SSH_PASSWORD"
+          echo "==================\n"
+
+          while true; do
+            echo "[$(date)] SSH Active - cancel workflow to terminate"
+            sleep 300
+          done
